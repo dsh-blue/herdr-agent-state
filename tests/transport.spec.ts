@@ -68,7 +68,9 @@ afterEach(async () => {
   if (active) {
     rmSync(active.socketPath, { force: true })
   }
-  rmSync(dir, { recursive: true, force: true })
+  if (dir) {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 describe('herdrEnabled / socketEndpoint', () => {

@@ -49,8 +49,11 @@ export function socketEndpoint(env: HerdrEnv): string {
 }
 
 /**
- * Deliver one request over a fresh single connection. Resolves `true` when the
- * socket accepts it; `false` on any failure. Never throws.
+ * Deliver one request over a fresh single connection. A pane report is
+ * fire-and-forget, so delivery means the request was written to Herdr's socket
+ * (the write flushed), not that Herdr replied — Herdr's pane socket does not
+ * necessarily acknowledge. Resolves `true` once the write flushes, `false` on
+ * any failure. Never throws.
  */
 export function sendRequest(
   request: PaneRequest,
@@ -72,9 +75,10 @@ export function sendRequest(
 
       const client = net.createConnection(endpoint)
       client.on('error', () => finish(false))
-      client.on('connect', () => client.write(`${JSON.stringify(request)}\n`))
-      client.on('data', () => finish(true))
       client.on('end', () => finish(false))
+      client.on('connect', () => {
+        client.write(`${JSON.stringify(request)}\n`, () => finish(true))
+      })
       timer = setTimeout(() => finish(false), delay)
       timer.unref?.()
     }
