@@ -1,0 +1,61 @@
+name: Publish to npm
+
+on:
+  # Manual publish / preview: run the workflow from the Actions tab. With
+  # `dry_run` checked it only does `npm publish --dry-run`.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — verify the package without publishing'
+        required: false
+        default: false
+        type: boolean
+  # Publish on a version tag (e.g. v0.1.1), after confirming it matches
+  # package.json.
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install test deps
+        # `--legacy-peer-deps` keeps the host-provided schemastery peer out of
+        # the publish job; devDeps (vitest) install so tests can run.
+        run: npm install --legacy-peer-deps --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify tag matches package version
+        if: github.event_name == 'push'
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match package version v$VERSION"
+            exit 1
+          fi
+
+      - name: Dry run
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm publish --dry-run --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
