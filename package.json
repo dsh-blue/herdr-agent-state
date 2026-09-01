@@ -1,6 +1,6 @@
 {
   "name": "@dsh-blue/herdr-agent-state",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "dsh plugin: report agent state (working/blocked/idle) and session reference to Herdr via its pane socket integration. Works in any dsh profile — TUIs, web, headless.",
   "type": "module",
   "main": "src/index.js",

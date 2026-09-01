@@ -3,9 +3,10 @@
  *
  * Mirrors Herdr's own bundled Pi integration wire contract: one newline-delimited
  * JSON request per `pane.report_agent` / `pane.report_agent_session` /
- * `pane.release_agent` call, a fresh single connection per request, a short
- * timeout plus one longer retry, and a failure that never rejects into the host
- * process (Herdr being absent must not disturb the dsh frontend).
+ * `pane.release_agent` call — plus the display-only `pane.report_metadata` for
+ * the pane title — a fresh single connection per request, a short timeout plus
+ * one longer retry, and a failure that never rejects into the host process
+ * (Herdr being absent must not disturb the dsh frontend).
  *
  * Only `node:net` is used.
  * @module @dsh-blue/herdr-agent-state/transport
@@ -74,12 +75,13 @@ export function sendRequest(request, endpoint, timeoutMs = 500, retryMs = 1500) 
  */
 export class HerdrReporter {
   /**
-   * @param {{ source: string, agent: string, reportSession: boolean, env: Record<string, string | undefined> }} options
+   * @param {{ source: string, agent: string, reportSession: boolean, reportTitle?: boolean, env: Record<string, string | undefined> }} options
    */
   constructor(options) {
     this.source = options.source
     this.agent = options.agent
     this.reportSessionRef = options.reportSession
+    this.reportTitleRef = options.reportTitle ?? false
     this.endpoint = socketEndpoint(options.env)
     this.paneId = options.env.HERDR_PANE_ID ?? ''
     // Wall-clock base keeps seq strictly increasing across process restarts.
@@ -88,6 +90,7 @@ export class HerdrReporter {
     this.sendInFlight = false
     this.queued = undefined
     this.lastSent = undefined
+    this.lastSentTitle = undefined
   }
 
   /** Record the session reference to attach to subsequent reports. */
@@ -139,8 +142,51 @@ export class HerdrReporter {
     })
   }
 
-  /** Release this pane's lifecycle authority (on unload or process exit). */
+  /**
+   * Report the dsh session title as display-only Herdr pane metadata. The
+   * `agent` and `applies_to_source` guards scope the report to exactly the
+   * moments this reporter holds the pane's lifecycle authority; `release()`
+   * clears the title explicitly when that authority is given up.
+   * @param {string | undefined} title
+   */
+  reportTitle(title) {
+    if (!this.reportTitleRef) return
+    if (typeof title !== 'string' || title.trim() === '') return
+    if (title === this.lastSentTitle) return
+    this.lastSentTitle = title
+    void this.send({
+      id: `${this.source}:title:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: 'pane.report_metadata',
+      params: {
+        pane_id: this.paneId,
+        source: this.source,
+        agent: this.agent,
+        applies_to_source: this.source,
+        title,
+        seq: this.nextSeq(),
+      },
+    })
+  }
+
+  /**
+   * Release this pane's lifecycle authority (on unload or process exit). The
+   * guard on a reported title is checked at acceptance time, not continuously,
+   * so a title this reporter set is cleared explicitly alongside the release.
+   */
   release() {
+    if (this.reportTitleRef && this.lastSentTitle !== undefined) {
+      this.lastSentTitle = undefined
+      void this.send({
+        id: `${this.source}:title-clear:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        method: 'pane.report_metadata',
+        params: {
+          pane_id: this.paneId,
+          source: this.source,
+          clear_title: true,
+          seq: this.nextSeq(),
+        },
+      })
+    }
     void this.send({
       id: `${this.source}:release:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       method: 'pane.release_agent',

@@ -117,6 +117,7 @@ describe('HerdrReporter', () => {
       source: 'herdr:dsh-agent-state',
       agent: 'dsh',
       reportSession: true,
+      reportTitle: false,
       env: env(),
     })
     reporter.setSessionId('sess-123')
@@ -142,7 +143,7 @@ describe('HerdrReporter', () => {
 
   it('keeps seq strictly increasing across reports', async () => {
     await startServer()
-    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, env: env() })
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: false, env: env() })
     reporter.publishState({ state: 'working' })
     await delay(10)
     reporter.publishState({ state: 'idle' })
@@ -155,7 +156,7 @@ describe('HerdrReporter', () => {
 
   it('reports the session reference with its start source', async () => {
     await startServer()
-    const reporter = new HerdrReporter({ source: 's', agent: 'blue', reportSession: true, env: env() })
+    const reporter = new HerdrReporter({ source: 's', agent: 'blue', reportSession: true, reportTitle: false, env: env() })
     reporter.setSessionId('sess-9')
     reporter.reportSession('resume')
     await delay(10)
@@ -171,20 +172,105 @@ describe('HerdrReporter', () => {
 
   it('releases pane authority', async () => {
     await startServer()
-    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: true, env: env() })
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: true, reportTitle: false, env: env() })
     reporter.release()
     await delay(10)
     const releaseReport = active!.requests.find((r) => r.method === 'pane.release_agent')
     expect(releaseReport?.params).toMatchObject({ pane_id: 'p1', source: 's', agent: 'dsh' })
+    expect(active!.requests.filter((r) => r.method === 'pane.report_metadata')).toHaveLength(0)
+  })
+
+  it('clears a reported title on release', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: true, env: env() })
+    reporter.reportTitle('t')
+    reporter.release()
+    reporter.release()
+    await delay(10)
+    const clears = active!.requests.filter(
+      (r) => r.method === 'pane.report_metadata' && (r.params as Record<string, unknown>).clear_title === true,
+    )
+    expect(clears).toHaveLength(1)
+    expect(clears[0]!.params).toMatchObject({ pane_id: 'p1', source: 's', clear_title: true })
+    expect(active!.requests.find((r) => r.method === 'pane.release_agent')).toBeTruthy()
+  })
+
+  it('does not clear a title on release when none was sent', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: true, env: env() })
+    reporter.release()
+    await delay(10)
+    expect(active!.requests.filter((r) => r.method === 'pane.report_metadata')).toHaveLength(0)
   })
 
   it('omits the session ref when reportSession is disabled', async () => {
     await startServer()
-    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, env: env() })
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: false, env: env() })
     reporter.setSessionId('sess-1')
     reporter.publishState({ state: 'working' })
     await delay(10)
     const last = active!.requests[active!.requests.length - 1]!
     expect(last.params).not.toHaveProperty('agent_session_id')
+  })
+
+  it('reports the title via pane.report_metadata with guards', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: true, env: env() })
+    reporter.reportTitle('Fix login')
+    await delay(10)
+    const metadata = active!.requests.find((r) => r.method === 'pane.report_metadata')
+    expect(metadata?.params).toMatchObject({
+      pane_id: 'p1',
+      source: 's',
+      agent: 'dsh',
+      applies_to_source: 's',
+      title: 'Fix login',
+    })
+    expect(typeof metadata?.params?.seq).toBe('number')
+  })
+
+  it('suppresses duplicate consecutive titles', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: true, env: env() })
+    reporter.reportTitle('t')
+    reporter.reportTitle('t')
+    await delay(10)
+    expect(active!.requests.filter((r) => r.method === 'pane.report_metadata')).toHaveLength(1)
+  })
+
+  it('sends nothing for empty or non-string titles', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: true, env: env() })
+    reporter.reportTitle('')
+    reporter.reportTitle('   ')
+    reporter.reportTitle(undefined)
+    await delay(10)
+    expect(active!.requests.filter((r) => r.method === 'pane.report_metadata')).toHaveLength(0)
+  })
+
+  it('no-ops title reporting when disabled', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: false, env: env() })
+    reporter.reportTitle('t')
+    await delay(10)
+    expect(active!.requests.filter((r) => r.method === 'pane.report_metadata')).toHaveLength(0)
+  })
+
+  it('keeps seq strictly increasing across report_agent and report_metadata', async () => {
+    await startServer()
+    const reporter = new HerdrReporter({ source: 's', agent: 'dsh', reportSession: false, reportTitle: true, env: env() })
+    reporter.publishState({ state: 'working' })
+    await delay(10)
+    reporter.reportTitle('t')
+    await delay(10)
+    reporter.publishState({ state: 'idle' })
+    await delay(10)
+    const seqs = active!.requests
+      .filter((r) => r.params?.seq !== undefined)
+      .map((r) => r.params?.seq as number)
+    expect(seqs).toHaveLength(3)
+    for (let i = 1; i < seqs.length; i += 1) {
+      expect(seqs[i]).toBeGreaterThan(seqs[i - 1]!)
+    }
   })
 })

@@ -55,3 +55,66 @@ export class AgentStateModel {
     return { state: 'idle' }
   }
 }
+
+/**
+ * Tracks which session's title is current and the latest applicable title,
+ * deciding when a title observation should be published.
+ */
+export class SessionTitleModel {
+  constructor() {
+    /** Session identity from the latest agent/session-start. */
+    this.sessionId = undefined
+    /** Latest applicable title for that session. */
+    this.title = undefined
+    /** Last title this model told the caller to publish (change tracking). */
+    this.lastReported = undefined
+  }
+
+  /**
+   * The tracked session changed (agent/session-start). Adopts the new identity
+   * and any pre-existing title (a resumed session's title predates the plugin),
+   * resetting change tracking so an identical title re-publishes.
+   * @param {string | undefined} sessionId
+   * @param {string | undefined} [initialTitle]
+   * @returns {string | undefined} the title to publish now, if any
+   */
+  setSession(sessionId, initialTitle) {
+    this.sessionId = sessionId
+    this.title = initialTitle
+    this.lastReported = undefined
+    return this.takePublishable()
+  }
+
+  /**
+   * One session/title observation from the session/event firehose. Ignores
+   * other sessions' titles and unchanged text; adopts the first observed
+   * session when none was recorded (plugin reloaded mid-session).
+   * @param {string | undefined} sessionId
+   * @param {string} title
+   * @returns {string | undefined} the title to publish now, if changed
+   */
+  observeTitle(sessionId, title) {
+    if (this.sessionId === undefined) this.sessionId = sessionId
+    if (sessionId === undefined || sessionId !== this.sessionId) return undefined
+    this.title = title
+    return this.takePublishable()
+  }
+
+  /**
+   * The report derived from the current inputs.
+   * @returns {{ title: string } | undefined}
+   */
+  desired() {
+    return typeof this.title === 'string' && this.title.trim() !== ''
+      ? { title: this.title }
+      : undefined
+  }
+
+  /** Consume the desired report once, tracking it as reported. */
+  takePublishable() {
+    const report = this.desired()
+    if (report === undefined || report.title === this.lastReported) return undefined
+    this.lastReported = report.title
+    return report.title
+  }
+}

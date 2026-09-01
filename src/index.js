@@ -2,11 +2,12 @@
  * Herdr agent-state reporter for any dsh frontend.
  *
  * A Cordis function plugin that, when loaded inside a Herdr pane, reports the
- * pane's semantic state (working / blocked / idle) and session reference to
- * Herdr's pane socket. It depends only on documented dsh extension points —
- * agent lifecycle events, the approval and user-question waterfalls — so it
- * works in TUI, web, and headless profiles alike. Outside a Herdr pane it is a
- * strict no-op.
+ * pane's semantic state (working / blocked / idle), session reference, and
+ * session title (as the Herdr pane title) to Herdr's pane socket. It depends
+ * only on documented dsh extension points — agent lifecycle events, the
+ * approval and user-question waterfalls, and the session-log event feed — so
+ * it works in TUI, web, and headless profiles alike. Outside a Herdr pane it
+ * is a strict no-op.
  *
  * Ships as plain ESM JavaScript (no build step) so `dsh plugin add` from a git
  * repo loads it directly without `prepare`/`lib`.
@@ -16,7 +17,7 @@
 
 import z from '@deepseek-ai/schemastery'
 
-import { AgentStateModel } from './state.js'
+import { AgentStateModel, SessionTitleModel } from './state.js'
 import { HerdrReporter, herdrEnabled } from './transport.js'
 
 export const name = 'herdr-agent-state'
@@ -44,6 +45,12 @@ export const Config = z.object({
   transport: z.union([z.const('socket'), z.const('cli')]).default('socket'),
   /** Report the pane's session reference so Herdr can expose it for restore. */
   reportSession: z.boolean().default(true),
+  /**
+   * Which title to publish as the Herdr pane title (display-only metadata).
+   * `session` mirrors the dsh session title — first-prompt fallback,
+   * LLM-generated, or pinned by `/rename`; `none` disables title reporting.
+   */
+  title: z.union([z.const('session'), z.const('none')]).default('session'),
   /** Whether to attach a human label to blocked reports. */
   message: z.union([z.const('tool'), z.const('none')]).default('tool'),
   /** Kill-switch for coexisting with another reporter in the same tree. */
@@ -60,7 +67,7 @@ function questionLabel(questions) {
 /**
  * Drive one pane's reporter from the live dsh event stream.
  * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{ agent: string, source: string, transport: 'socket' | 'cli', reportSession: boolean, message: 'tool' | 'none', enabled: boolean }} config
+ * @param {{ agent: string, source: string, transport: 'socket' | 'cli', reportSession: boolean, title: 'session' | 'none', message: 'tool' | 'none', enabled: boolean }} config
  */
 export function apply(ctx, config) {
   if (!config.enabled) return
@@ -75,9 +82,11 @@ export function apply(ctx, config) {
     source: config.source,
     agent: config.agent,
     reportSession: config.reportSession,
+    reportTitle: config.title !== 'none',
     env,
   })
   const model = new AgentStateModel()
+  const titleModel = new SessionTitleModel()
 
   const publish = (force = false) => {
     const report = model.desired()
@@ -123,10 +132,31 @@ export function apply(ctx, config) {
   })
 
   ctx.on('agent/session-start', (payload) => {
-    reporter.setSessionId(payload.agent?.session?.header?.id ?? undefined)
+    const session = payload.agent?.session
+    const sessionId = session?.header?.id ?? undefined
+    reporter.setSessionId(sessionId)
     reporter.reportSession(payload.source)
+    // A resumed session's past titles are constructor-seed log events that
+    // never reach the session/event feed, so read the current one directly.
+    let initialTitle
+    try {
+      initialTitle = ctx.get('sessionTitle')?.get(session)?.title
+    } catch {
+      // Service not mounted or session not live: the feed covers the rest.
+    }
+    reporter.reportTitle(titleModel.setSession(sessionId, initialTitle))
     model.setRunning(payload.agent, false)
     publish(true)
+  })
+
+  // Post-commit feed of appended session-log events; keep only title commits
+  // for the tracked session (child/subagent sessions in this process are
+  // skipped by the session-id match inside the model).
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'session/title') return
+    const title = event.data?.title
+    if (typeof title !== 'string') return
+    reporter.reportTitle(titleModel.observeTitle(session?.header?.id ?? session?.id, title))
   })
 
   ctx.effect(
