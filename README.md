@@ -21,14 +21,15 @@ dsh plugin --profile <profile> add @dsh-blue/herdr-agent-state
 ```
 
 It inserts a row labelled `herdr-agent-state`. To change the Herdr agent label
-that a frontend reports, override the same row id in the profile's
-`cordis.patch.yml` (last write wins per row):
+a frontend reports, patch the same row id in the profile's `cordis.patch.yml`
+(an id-targeted patch replaces that row's whole `config`; the schema defaults
+fill any field you omit):
 
 ```yaml
-plugins:
-  herdr-agent-state:
-    config:
-      agent: blue   # default dsh; this frontend's own label
+# ~/.dsh/profiles/<profile>/cordis.patch.yml
+- id: herdr-agent-state
+  config:
+    agent: blue        # default dsh; this frontend's own label
 ```
 
 The plugin is a strict no-op outside a Herdr pane (`HERDR_ENV=1` plus
@@ -68,14 +69,81 @@ stale authority.
 
 ## Configuration
 
-| Field | Default | Meaning |
-|---|---|---|
-| `agent` | `'dsh'` | Herdr agent label reported for the pane. A frontend sets its own name here. |
-| `source` | `'herdr:dsh-agent-state'` | Stable unique integration source. Keep it constant. |
-| `transport` | `'socket'` | `socket` (implemented) or `cli` (declared, not yet implemented — rejected at load). |
-| `reportSession` | `true` | Report the pane's session reference to Herdr. |
-| `message` | `'tool'` | `tool` attaches a human label to blocked reports; `none` omits it. |
-| `enabled` | `true` | Kill-switch to coexist with another reporter in the same tree. |
+### Configuration reference
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `agent` | string | `'dsh'` | The Herdr agent label reported for the pane. Set a frontend's own name (e.g. `blue`) so Herdr's sidebar groups it under that label. |
+| `source` | string | `'herdr:dsh-agent-state'` | Stable, unique integration source. Herdr attributes the pane's lifecycle authority to this source. **Keep it constant.** Changing it makes Herdr treat the pane as a *different* authority mid-session. |
+| `transport` | `'socket'` \| `'cli'` | `'socket'` | How to report to Herdr. Only `socket` is implemented (speaks the pane socket directly). `cli` is declared but not yet implemented — it throws **at load**, so don't set it. |
+| `reportSession` | boolean | `true` | Report the pane's session reference (`agent_session_id`) so Herdr can expose it for restore. Set `false` to suppress session reporting. |
+| `message` | `'tool'` \| `'none'` | `'tool'` | Whether to attach a human label to `blocked` reports. `tool` sends the tool name / question summary; `none` sends `blocked` with no message. |
+| `enabled` | boolean | `true` | Kill-switch. Set `false` to disable the reporter in this tree — useful to coexist with another reporter. |
+
+### How to configure it
+
+The plugin is a bundle row labelled `herdr-agent-state`, so it is inserted
+automatically when you `dsh plugin add`. Because its `Config` schema gives every
+field a default, you only set what you want to change; the schema fills the
+rest. A profile's `cordis.patch.yml` is a **top-level YAML array of loader patch
+entries**, so you target the row by `id` and replace its `config`:
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml
+- id: herdr-agent-state
+  config:
+    agent: blue
+```
+
+The patch replaces the row's whole `config`, so the schema defaults supply any
+field you don't set. Include `name` as a guard — if it ever mismatches the row,
+the patch is skipped with a warning instead of silently applying:
+
+```yaml
+- id: herdr-agent-state
+  name: '@dsh-blue/herdr-agent-state'
+  config:
+    agent: blue
+    source: herdr:dsh-agent-state
+    transport: socket
+    reportSession: true
+    message: tool
+    enabled: true
+```
+
+### Examples
+
+Set the Herdr label to `blue` when Blue hosts the pane (all other fields
+default):
+
+```yaml
+- id: herdr-agent-state
+  config:
+    agent: blue
+```
+
+Disable session reporting and verbose blocked messages:
+
+```yaml
+- id: herdr-agent-state
+  config:
+    reportSession: false
+    message: none
+```
+
+### Notes
+
+- **Changing `source`** re-attributes the pane's authority in Herdr. Keep it at
+  the default unless you are deliberately running two reporters in the same
+  tree — then give each a distinct `source`, and use `enabled: false` on the one
+  you want silent.
+- **`transport: 'cli'` is not implemented.** Setting it throws during plugin
+  load (fail-fast), so leave it as `socket`.
+- **`config` is validated** against the schemastery schema at load; an invalid
+  value (for example a `transport` that isn't `socket`/`cli`) is rejected, and
+  the plugin fails to load rather than running half-configured.
+- Because a patch replaces the row's whole `config`, any field you don't set
+  comes from the schema default — you do not need to copy every field.
 
 ## Version compatibility
 
