@@ -3,16 +3,12 @@
   "version": "0.1.0",
   "description": "dsh plugin: report agent state (working/blocked/idle) and session reference to Herdr via its pane socket integration. Works in any dsh profile — TUIs, web, headless.",
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
+  "main": "src/index.js",
   "exports": {
-    ".": {
-      "types": "./lib/index.d.ts",
-      "import": "./lib/index.js"
-    }
+    ".": "./src/index.js"
   },
   "files": [
-    "lib",
+    "src",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -37,27 +33,12 @@
   ],
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/schemastery": "^3.18.2",
-    "@deepseek-ai/dsh-agent": ">=0.1.0-alpha.0 <0.2",
-    "@deepseek-ai/dsh-user-approval": ">=0.1.0-alpha.0 <0.2",
-    "@deepseek-ai/dsh-user-questions": ">=0.1.0-alpha.0 <0.2"
+    "@deepseek-ai/schemastery": "^3.18.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-agent": ">=0.1.0-alpha.0 <0.2",
-    "@deepseek-ai/dsh-user-approval": ">=0.1.0-alpha.0 <0.2",
-    "@deepseek-ai/dsh-user-questions": ">=0.1.0-alpha.0 <0.2",
-    "@deepseek-ai/schemastery": "^3.18.2",
-    "@types/node": "^24.0.0",
-    "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepare": "tsc -p tsconfig.json",
-    "prepack": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest"
   }

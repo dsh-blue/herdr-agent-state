@@ -38,8 +38,9 @@ to a normal terminal session.
 ### Install straight from GitHub (before publishing to npm)
 
 `dsh plugin` is a thin [pnpm](https://pnpm.io/) forwarder, so it accepts any
-pnpm dependency spec — including a GitHub repo. `dsh plugin add` both installs
-and auto-activates the bundle, so one command is enough:
+pnpm dependency spec — including a GitHub repo. The plugin ships plain ESM
+JavaScript with no build step, so `dsh plugin add` installs and auto-activates
+the bundle in one command with no `prepare`/`lib` and no `allowBuilds` entry:
 
 ```sh
 # master branch; pin the exact commit when you want reproducibility
@@ -47,11 +48,6 @@ dsh plugin --profile <profile> add github:dsh-blue/herdr-agent-state
 # or pinned to a commit (the pattern Blue marketplace installs use):
 dsh plugin --profile <profile> add dsh-blue/herdr-agent-state#<40-char-sha>
 ```
-
-pnpm clones the repo, installs it by its real package name
-(`@dsh-blue/herdr-agent-state`), builds `lib/` via the `prepare` script, and
-dsh's bundle reconciliation adds it to the profile's layer stack — **no `npm
-publish` needed**. Pin a commit rather than `@master` for reproducibility.
 
 ## How it reports state
 
@@ -83,24 +79,20 @@ stale authority.
 
 ## Version compatibility
 
-Built against the dsh `0.1.2-alpha` line. It pins the same Harness events as its
-`peerDependencies` on `@deepseek-ai/dsh-agent`, `@deepseek-ai/dsh-user-approval`,
-and `@deepseek-ai/dsh-user-questions`, and shares the host's `@deepseek-ai/cordis`
-and `@deepseek-ai/schemastery` instances (declared as peers, so no duplicate
-copy is installed for the runtime `Config` schema).
+Built against the dsh `0.1.2-alpha` line. It shares the host's
+`@deepseek-ai/schemastery` instance (declared as a peer, so the runtime
+`Config` schema uses the same copy the host validates against).
 
 ## Development
 
 ```sh
 pnpm install
-pnpm build       # tsc -> lib/
-pnpm typecheck   # tsc --noEmit
 pnpm test        # vitest run (unit + fake-socket integration)
 ```
 
-The `state` and `transport` modules depend only on Node builtins, so their tests
-run without a dsh host; only the plugin wiring (`src/index.ts`) needs the dsh
-peer types at typecheck time.
+The plugin ships as plain ESM JavaScript, so there is no build step. Its
+`state` and `transport` modules depend only on Node builtins, so their tests
+run without a dsh host.
 
 ## License
 

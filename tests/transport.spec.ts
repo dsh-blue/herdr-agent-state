@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { HerdrReporter, herdrEnabled, sendRequest, socketEndpoint } from '../src/transport.ts'
+import { HerdrReporter, herdrEnabled, sendRequest, socketEndpoint } from '../src/transport.js'
 
 interface FakeServer {
   requests: Array<Record<string, unknown>>

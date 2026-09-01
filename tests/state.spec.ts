@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { AgentStateModel, type Report } from '../src/state.ts'
+import { AgentStateModel, type Report } from '../src/state.js'
 
 describe('AgentStateModel', () => {
   it('defaults to idle', () => {
