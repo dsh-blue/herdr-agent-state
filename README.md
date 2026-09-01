@@ -13,19 +13,22 @@ approval and user-question waterfalls) and carries no UI or renderer dependency.
 
 ## Install
 
-Install it into a profile, then mount the row:
+The plugin is a **dsh bundle** (`dsh.bundle.patch` → `cordis.patch.yml`), so
+`dsh plugin add` activates it automatically — no manual `cordis.patch.yml` edit:
 
 ```sh
 dsh plugin --profile <profile> add @dsh-blue/herdr-agent-state
 ```
 
-Add a row to the profile's `cordis.patch.yml` (or your overlay):
+It inserts a row labelled `herdr-agent-state`. To change the Herdr agent label
+that a frontend reports, override the same row id in the profile's
+`cordis.patch.yml` (last write wins per row):
 
 ```yaml
 plugins:
   herdr-agent-state:
-    $if: .herdr  # optional: gate on an env/`HERDR_ENV` value; the plugin self-disables outside Herdr anyway
-    agent: blue   # default `dsh`; set your frontend's own label here
+    config:
+      agent: blue   # default dsh; this frontend's own label
 ```
 
 The plugin is a strict no-op outside a Herdr pane (`HERDR_ENV=1` plus
@@ -35,27 +38,20 @@ to a normal terminal session.
 ### Install straight from GitHub (before publishing to npm)
 
 `dsh plugin` is a thin [pnpm](https://pnpm.io/) forwarder, so it accepts any
-pnpm dependency spec — including a GitHub repo. Use it to try the plugin
-without publishing to npm first:
+pnpm dependency spec — including a GitHub repo. `dsh plugin add` both installs
+and auto-activates the bundle, so one command is enough:
 
 ```sh
-# @master branch, or pin the exact commit when you want reproducibility
+# master branch; pin the exact commit when you want reproducibility
 dsh plugin --profile <profile> add github:dsh-blue/herdr-agent-state
-# or, pinned to a commit (as Blue's marketplace installs do):
+# or pinned to a commit (the pattern Blue marketplace installs use):
 dsh plugin --profile <profile> add dsh-blue/herdr-agent-state#<40-char-sha>
 ```
 
 pnpm clones the repo, installs it by its real package name
-(`@dsh-blue/herdr-agent-state`), and runs the `prepare` script, which builds
-`lib/` with `tsc`. The profile then loads it like any npm-installed plugin —
-**no `npm publish` needed**. Pin a commit rather than `@master` when you want
-the installed plugin to stay reproducible.
-
-> The plugin is a **plain plugin**, not a `dsh.bundle`, so `dsh plugin add`
-> installs it as a dependency and prints a "declares no `dsh.bundle`" warning;
-> add the `cordis.patch.yml` row shown above to load it. If you would rather
-> have `dsh plugin add` activate it automatically, add `dsh.bundle.patch` and a
-> `cordis.patch.yml` (the pattern Blue marketplace plugins use).
+(`@dsh-blue/herdr-agent-state`), builds `lib/` via the `prepare` script, and
+dsh's bundle reconciliation adds it to the profile's layer stack — **no `npm
+publish` needed**. Pin a commit rather than `@master` for reproducibility.
 
 ## How it reports state
 
