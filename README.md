@@ -32,6 +32,31 @@ The plugin is a strict no-op outside a Herdr pane (`HERDR_ENV=1` plus
 `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` absent), so it never adds side effects
 to a normal terminal session.
 
+### Install straight from GitHub (before publishing to npm)
+
+`dsh plugin` is a thin [pnpm](https://pnpm.io/) forwarder, so it accepts any
+pnpm dependency spec — including a GitHub repo. Use it to try the plugin
+without publishing to npm first:
+
+```sh
+# @master branch, or pin the exact commit when you want reproducibility
+dsh plugin --profile <profile> add github:dsh-blue/herdr-agent-state
+# or, pinned to a commit (as Blue's marketplace installs do):
+dsh plugin --profile <profile> add dsh-blue/herdr-agent-state#<40-char-sha>
+```
+
+pnpm clones the repo, installs it by its real package name
+(`@dsh-blue/herdr-agent-state`), and runs the `prepare` script, which builds
+`lib/` with `tsc`. The profile then loads it like any npm-installed plugin —
+**no `npm publish` needed**. Pin a commit rather than `@master` when you want
+the installed plugin to stay reproducible.
+
+> The plugin is a **plain plugin**, not a `dsh.bundle`, so `dsh plugin add`
+> installs it as a dependency and prints a "declares no `dsh.bundle`" warning;
+> add the `cordis.patch.yml` row shown above to load it. If you would rather
+> have `dsh plugin add` activate it automatically, add `dsh.bundle.patch` and a
+> `cordis.patch.yml` (the pattern Blue marketplace plugins use).
+
 ## How it reports state
 
 | Herdr state | dsh signal |
@@ -64,7 +89,9 @@ stale authority.
 
 Built against the dsh `0.1.2-alpha` line. It pins the same Harness events as its
 `peerDependencies` on `@deepseek-ai/dsh-agent`, `@deepseek-ai/dsh-user-approval`,
-and `@deepseek-ai/dsh-user-questions`.
+and `@deepseek-ai/dsh-user-questions`, and shares the host's `@deepseek-ai/cordis`
+and `@deepseek-ai/schemastery` instances (declared as peers, so no duplicate
+copy is installed for the runtime `Config` schema).
 
 ## Development
 

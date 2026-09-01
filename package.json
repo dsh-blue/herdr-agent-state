@@ -32,6 +32,7 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/schemastery": "^3.18.2",
     "@deepseek-ai/dsh-agent": ">=0.1.0-alpha.0 <0.2",
     "@deepseek-ai/dsh-user-approval": ">=0.1.0-alpha.0 <0.2",
     "@deepseek-ai/dsh-user-questions": ">=0.1.0-alpha.0 <0.2"
@@ -49,6 +50,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepare": "tsc -p tsconfig.json",
+    "prepack": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest"
   }
