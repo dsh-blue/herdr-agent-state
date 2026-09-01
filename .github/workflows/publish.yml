@@ -2,7 +2,9 @@ name: Publish to npm
 
 on:
   # Manual publish / preview: run the workflow from the Actions tab. With
-  # `dry_run` checked it only does `npm publish --dry-run`.
+  # `dry_run` checked it only does `npm publish --dry-run`. `tag` sets the npm
+  # dist-tag; it defaults to `alpha` so this pre-GA package is NOT tagged
+  # `latest`.
   workflow_dispatch:
     inputs:
       dry_run:
@@ -10,14 +12,22 @@ on:
         required: false
         default: false
         type: boolean
+      tag:
+        description: 'npm dist-tag to publish under (avoid latest)'
+        required: false
+        default: 'alpha'
+        type: string
   # Publish on a version tag (e.g. v0.1.1), after confirming it matches
-  # package.json.
+  # package.json. Uses the same non-latest `TAG`.
   push:
     tags:
       - 'v*'
 
 permissions:
   contents: read
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || 'alpha' }}
 
 jobs:
   publish:
@@ -50,12 +60,12 @@ jobs:
 
       - name: Dry run
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: npm publish --dry-run --access public
+        run: npm publish --dry-run --access public --tag "$TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        run: npm publish --access public
+        run: npm publish --access public --tag "$TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
