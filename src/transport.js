@@ -3,10 +3,10 @@
  *
  * Mirrors Herdr's own bundled Pi integration wire contract: one newline-delimited
  * JSON request per `pane.report_agent` / `pane.report_agent_session` /
- * `pane.release_agent` call — plus the display-only `pane.report_metadata` for
- * the pane title — a fresh single connection per request, a short timeout plus
- * one longer retry, and a failure that never rejects into the host process
- * (Herdr being absent must not disturb the dsh frontend).
+ * `pane.release_agent` call — plus display-only `pane.report_metadata` for the
+ * pane title, tokens, and state labels — a fresh single connection per request,
+ * a short timeout plus one longer retry, and a failure that never rejects into
+ * the host process (Herdr being absent must not disturb the dsh frontend).
  *
  * Only `node:net` is used.
  * @module @dsh-blue/herdr-agent-state/transport
@@ -23,6 +23,22 @@ export function herdrEnabled(env) {
 export function socketEndpoint(env) {
   const raw = env.HERDR_SOCKET_PATH ?? ''
   return process.platform === 'win32' && raw !== '' ? `\\\\.\\pipe\\${raw}` : raw
+}
+
+/** Shallow, undefined-tolerant equality for the small metadata payloads. */
+function shallowEqual(a, b) {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const key of keys) {
+    if ((a[key] ?? undefined) !== (b[key] ?? undefined)) return false
+  }
+  return true
+}
+
+/** A fresh per-request id that stays unique across bursts. */
+function requestId(prefix) {
+  return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 }
 
 /**
@@ -72,30 +88,43 @@ export function sendRequest(request, endpoint, timeoutMs = 500, retryMs = 1500) 
  * Owns the seq counter, the single-flight latest-wins state queue, the session
  * reference, and the transport. Calling `publishState` coalesces bursts: only
  * the newest state is sent, and only when it differs from the last sent one.
+ * Metadata (`reportMetadata`) is per-kind deduped and sent directly, like the
+ * session report: these values change rarely and never need burst coalescing.
  */
 export class HerdrReporter {
   /**
-   * @param {{ source: string, agent: string, reportSession: boolean, reportTitle?: boolean, env: Record<string, string | undefined> }} options
+   * @param {{ source: string, agent: string, reportSession: boolean, reportTitle?: boolean, reportTokens?: boolean, env: Record<string, string | undefined> }} options
    */
   constructor(options) {
     this.source = options.source
     this.agent = options.agent
     this.reportSessionRef = options.reportSession
     this.reportTitleRef = options.reportTitle ?? false
+    this.reportTokensRef = options.reportTokens ?? false
     this.endpoint = socketEndpoint(options.env)
     this.paneId = options.env.HERDR_PANE_ID ?? ''
     // Wall-clock base keeps seq strictly increasing across process restarts.
     this.seq = Date.now() * 1000
     this.sessionId = undefined
+    this.sessionPath = undefined
     this.sendInFlight = false
     this.queued = undefined
     this.lastSent = undefined
     this.lastSentTitle = undefined
+    this.lastSentTokens = undefined
+    this.lastSentStateLabels = undefined
+    /** Token keys ever sent, so release() can clear exactly those. */
+    this.sentTokenKeys = new Set()
   }
 
   /** Record the session reference to attach to subsequent reports. */
   setSessionId(id) {
     this.sessionId = id
+  }
+
+  /** Record the session log path (jsonl backends) to attach to session reports. */
+  setSessionPath(path) {
+    this.sessionPath = typeof path === 'string' && path !== '' ? path : undefined
   }
 
   nextSeq() {
@@ -105,7 +134,10 @@ export class HerdrReporter {
 
   sessionParams() {
     if (this.reportSessionRef && this.sessionId !== undefined && this.sessionId !== '') {
-      return { agent_session_id: this.sessionId }
+      return {
+        agent_session_id: this.sessionId,
+        ...(this.sessionPath !== undefined ? { agent_session_path: this.sessionPath } : {}),
+      }
     }
     return {}
   }
@@ -124,12 +156,69 @@ export class HerdrReporter {
     void this.drain()
   }
 
+  /**
+   * Report display-only Herdr pane metadata. Title and state labels are
+   * presentation fields and carry the `agent` / `applies_to_source` guards, so
+   * they display exactly while this reporter holds the pane's lifecycle
+   * authority; tokens always apply and are this reporter's to clear. One
+   * combined request carries whichever kinds changed; nothing is sent when
+   * nothing did.
+   *
+   * @param {{ title?: string, tokens?: Record<string, string | null>, state_labels?: Record<string, string> } | undefined} fields
+   */
+  reportMetadata(fields = {}) {
+    const params = { pane_id: this.paneId, source: this.source }
+    let guarded = false
+
+    if (
+      this.reportTitleRef &&
+      typeof fields.title === 'string' &&
+      fields.title.trim() !== '' &&
+      fields.title !== this.lastSentTitle
+    ) {
+      this.lastSentTitle = fields.title
+      params.title = fields.title
+      guarded = true
+    }
+    if (
+      fields.state_labels !== undefined &&
+      Object.keys(fields.state_labels).length > 0 &&
+      !shallowEqual(fields.state_labels, this.lastSentStateLabels)
+    ) {
+      this.lastSentStateLabels = { ...fields.state_labels }
+      params.state_labels = { ...fields.state_labels }
+      guarded = true
+    }
+    if (
+      this.reportTokensRef &&
+      fields.tokens !== undefined &&
+      Object.keys(fields.tokens).length > 0 &&
+      !shallowEqual(fields.tokens, this.lastSentTokens)
+    ) {
+      this.lastSentTokens = { ...fields.tokens }
+      params.tokens = { ...fields.tokens }
+      for (const key of Object.keys(fields.tokens)) this.sentTokenKeys.add(key)
+    }
+
+    if (params.title === undefined && params.state_labels === undefined && params.tokens === undefined) return
+    if (guarded) {
+      params.agent = this.agent
+      params.applies_to_source = this.source
+    }
+    params.seq = this.nextSeq()
+    void this.send({
+      id: requestId(`${this.source}:meta`),
+      method: 'pane.report_metadata',
+      params,
+    })
+  }
+
   /** Report the pane's session reference; Herdr exposes it for restore. */
   reportSession(sessionStartSource) {
     const params = this.sessionParams()
     if (Object.keys(params).length === 0) return
     void this.send({
-      id: `${this.source}:session:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      id: requestId(`${this.source}:session`),
       method: 'pane.report_agent_session',
       params: {
         pane_id: this.paneId,
@@ -143,52 +232,32 @@ export class HerdrReporter {
   }
 
   /**
-   * Report the dsh session title as display-only Herdr pane metadata. The
-   * `agent` and `applies_to_source` guards scope the report to exactly the
-   * moments this reporter holds the pane's lifecycle authority; `release()`
-   * clears the title explicitly when that authority is given up.
-   * @param {string | undefined} title
-   */
-  reportTitle(title) {
-    if (!this.reportTitleRef) return
-    if (typeof title !== 'string' || title.trim() === '') return
-    if (title === this.lastSentTitle) return
-    this.lastSentTitle = title
-    void this.send({
-      id: `${this.source}:title:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-      method: 'pane.report_metadata',
-      params: {
-        pane_id: this.paneId,
-        source: this.source,
-        agent: this.agent,
-        applies_to_source: this.source,
-        title,
-        seq: this.nextSeq(),
-      },
-    })
-  }
-
-  /**
    * Release this pane's lifecycle authority (on unload or process exit). The
-   * guard on a reported title is checked at acceptance time, not continuously,
-   * so a title this reporter set is cleared explicitly alongside the release.
+   * guards on presentation metadata are checked when a report arrives, not
+   * continuously, so every metadata kind this reporter sent is cleared
+   * explicitly alongside the release.
    */
   release() {
-    if (this.reportTitleRef && this.lastSentTitle !== undefined) {
+    const clear = {}
+    if (this.reportTitleRef && this.lastSentTitle !== undefined) clear.clear_title = true
+    if (this.lastSentStateLabels !== undefined) clear.clear_state_labels = true
+    if (this.reportTokensRef && this.sentTokenKeys.size > 0) {
+      clear.tokens = {}
+      for (const key of this.sentTokenKeys) clear.tokens[key] = null
+    }
+    if (Object.keys(clear).length > 0) {
       this.lastSentTitle = undefined
+      this.lastSentStateLabels = undefined
+      this.lastSentTokens = undefined
+      this.sentTokenKeys.clear()
       void this.send({
-        id: `${this.source}:title-clear:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        id: requestId(`${this.source}:meta-clear`),
         method: 'pane.report_metadata',
-        params: {
-          pane_id: this.paneId,
-          source: this.source,
-          clear_title: true,
-          seq: this.nextSeq(),
-        },
+        params: { pane_id: this.paneId, source: this.source, ...clear, seq: this.nextSeq() },
       })
     }
     void this.send({
-      id: `${this.source}:release:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      id: requestId(`${this.source}:release`),
       method: 'pane.release_agent',
       params: { pane_id: this.paneId, source: this.source, agent: this.agent },
     })
@@ -203,7 +272,7 @@ export class HerdrReporter {
         this.queued = undefined
         const params = this.sessionParams()
         await this.send({
-          id: `${this.source}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+          id: requestId(`${this.source}:state`),
           method: 'pane.report_agent',
           params: {
             pane_id: this.paneId,

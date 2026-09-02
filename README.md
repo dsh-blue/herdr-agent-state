@@ -1,12 +1,13 @@
 # @dsh-blue/herdr-agent-state
 
 A DeepSeek Harness (`dsh`) plugin that reports a pane's agent state — `working`,
-`blocked`, `idle` — its session reference, and its session title (as the Herdr
-pane title) to [Herdr](https://herdr.dev/) through Herdr's pane socket
-integration. It lets Herdr's sidebar show where the agent actually is, surface
-waiting agents, name panes after the conversation, and expose the session for
-restore, **without any change to Herdr** (Herdr's [custom
-integration](https://herdr.dev/docs/integrations/#integrate-your-own-agent)
+`blocked`, `idle`, labeled with the currently-executing tool while working — its
+session reference and log path, and its session display facts (title, model,
+and context usage as pane metadata) to [Herdr](https://herdr.dev/) through
+Herdr's pane socket integration. It lets Herdr's sidebar show where the agent
+actually is, surface waiting agents, name panes after the conversation, and
+expose the session for restore, **without any change to Herdr** (Herdr's
+[custom integration](https://herdr.dev/docs/integrations/#integrate-your-own-agent)
 path).
 
 It works in **any dsh frontend** — TUIs, the web app, and headless — because it
@@ -60,6 +61,13 @@ dsh plugin --profile <profile> add dsh-blue/herdr-agent-state#<40-char-sha>
 | `blocked` | an `approval/request` or `user-questions/request` waterfall is awaiting an answer |
 | `idle` | no agent running and nothing pending |
 
+While working, the pane report carries a `message` naming the
+currently-executing tool (observed on the `tools/execute` waterfall, which
+fires only for calls that survived approval — denied calls never label). The
+session reference carries both `agent_session_id` and, when the profile
+persists sessions as jsonl, `agent_session_path` (the absolute log path);
+sqlite or no-persistence backends omit the path.
+
 Blocked observations are **passive**: the plugin calls `await next()` and returns
 the downstream decision unchanged, so approval and question flows are never
 altered. Reports are coalesced (latest value wins) and tagged with a strictly
@@ -69,27 +77,38 @@ The plugin releases the pane's lifecycle authority on unload and process exit,
 and re-reports on `agent/session-start` so a reload does not leave Herdr with a
 stale authority.
 
-## How it reports the title
+## How it reports metadata
 
-The plugin mirrors the dsh session title — the first-prompt fallback, the
-LLM-generated refinement, or a title pinned with `/rename` — as the Herdr pane
-title through Herdr's display-only `pane.report_metadata` channel:
+All display-only extras ride Herdr's `pane.report_metadata` channel. Title and
+state labels are presentation fields guarded by the same `source`/`agent` as
+the state reports plus an `applies_to_source` guard, so they apply exactly
+while this reporter holds the pane's lifecycle authority; tokens always apply
+and are this reporter's to clear. Herdr checks the guards when a report
+arrives (not continuously), so the reporter clears everything it sent when it
+releases the pane's authority. Metadata never affects waits, notifications, or
+rollups, and is not restored across a Herdr server restart.
 
-- Titles are observed on the same `session/title` session-log feed the dsh TUI
-  itself renders, filtered to the session the pane's agent is currently
-  running (subagent sessions in the same process are skipped).
-- A resumed session's existing title is read directly at `agent/session-start`
-  (past title events are replay seeds that never re-enter the live feed), so a
-  restored pane is named immediately.
-- The report carries the same `source` and `agent` as the state reports plus
-  an `applies_to_source` guard, so the title is accepted exactly while this
-  reporter holds the pane's lifecycle authority. Herdr checks that guard when
-  the report arrives (not continuously), so the reporter also clears the title
-  when it releases the pane's authority. A title never affects waits,
-  notifications, or rollups, and is not restored across a Herdr server
-  restart.
-- Herdr trims and caps the text; after a `/clear` the previous title stays
+- **Title** (`title: session`) mirrors the dsh session title — first-prompt
+  fallback, LLM-generated refinement, or pinned by `/rename`. Titles are
+  observed on the same `session/title` session-log feed the dsh TUI renders,
+  filtered to the session the pane's agent is running (subagent sessions in
+  the same process are skipped); a resumed session's existing title is read
+  directly at `agent/session-start`, since past title events are replay seeds
+  that never re-enter the live feed. After a `/clear` the previous title stays
   until the new session produces its first title (usually seconds).
+- **Tokens** (`tokens: auto`) report `model` (the raw model id) and `ctx`
+  (context occupancy, `used/window` mirroring the dsh TUI status bar, e.g.
+  `34k/1.0M`; bare `used` when the route's context window is unknown). Model
+  and window come from the `request/header` / `request/context` log events and
+  update on every assistant step's usage; a resumed session seeds all three
+  from the replayed log. Herdr's Agent sidebar can render them as `$model`
+  and `$ctx`. Tokens are cleared on release.
+- **State labels** (`stateLabels`) override the visible text per Herdr state —
+  for example `{ working: 工作中, blocked: 等待确认 }`. Non-blank entries are
+  sent once per session start and cleared on release.
+- **Working message** (`workingMessage: tool`) attaches the
+  currently-executing tool name to `working` state reports (see above);
+  blocked labels are unchanged and still governed by `message`.
 
 ## Configuration
 
@@ -103,6 +122,9 @@ title through Herdr's display-only `pane.report_metadata` channel:
 | `reportSession` | boolean | `true` | Report the pane's session reference (`agent_session_id`) so Herdr can expose it for restore. Set `false` to suppress session reporting. |
 | `title` | `'session'` \| `'none'` | `'session'` | Which title to publish as the Herdr pane title (display-only metadata). `session` mirrors the dsh session title — first-prompt fallback, LLM-generated, or pinned by `/rename`; `none` disables title reporting. |
 | `message` | `'tool'` \| `'none'` | `'tool'` | Whether to attach a human label to `blocked` reports. `tool` sends the tool name / question summary; `none` sends `blocked` with no message. |
+| `workingMessage` | `'tool'` \| `'none'` | `'tool'` | Whether to attach the currently-executing tool name to `working` reports. |
+| `tokens` | `'auto'` \| `'none'` | `'auto'` | Report the `model` and `ctx` (context usage `used/window`) tokens as Herdr Agent-sidebar metadata. `none` disables. |
+| `stateLabels` | `{ idle?, working?, blocked?, done?, unknown? }` | `{}` | Display text per Herdr state; non-blank entries are sent as pane state labels. |
 | `enabled` | boolean | `true` | Kill-switch. Set `false` to disable the reporter in this tree — useful to coexist with another reporter. |
 
 ### How to configure it
@@ -134,6 +156,14 @@ the patch is skipped with a warning instead of silently applying:
     reportSession: true
     title: session
     message: tool
+    workingMessage: tool
+    tokens: auto
+    stateLabels:
+      idle: ''
+      working: ''
+      blocked: ''
+      done: ''
+      unknown: ''
     enabled: true
 ```
 
@@ -165,6 +195,26 @@ Disable title reporting (keep state and session reports):
     title: none
 ```
 
+Localize the Herdr state display (state labels):
+
+```yaml
+- id: herdr-agent-state
+  config:
+    stateLabels:
+      working: 工作中
+      blocked: 等待确认
+      idle: 空闲
+      done: 已完成
+```
+
+Turn off the sidebar tokens while keeping the title:
+
+```yaml
+- id: herdr-agent-state
+  config:
+    tokens: none
+```
+
 ### Notes
 
 - **Changing `source`** re-attributes the pane's authority in Herdr. Keep it at
@@ -176,9 +226,10 @@ Disable title reporting (keep state and session reports):
 - **`config` is validated** against the schemastery schema at load; an invalid
   value (for example a `transport` that isn't `socket`/`cli`) is rejected, and
   the plugin fails to load rather than running half-configured.
-- The pane title rides the same `source` and `agent` guards as the state
-  reports; changing `source` mid-session affects the title the same way it
-  affects lifecycle authority.
+- The pane title and state labels ride the same `source` and `agent` guards as
+  the state reports; changing `source` mid-session affects them the same way
+  it affects lifecycle authority. Tokens are not guarded — they always apply —
+  so this reporter clears them on release.
 - Because a patch replaces the row's whole `config`, any field you don't set
   comes from the schema default — you do not need to copy every field.
 
